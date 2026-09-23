@@ -6,8 +6,7 @@ The system follows a layered backend architecture with clear separation between 
 
 ---
 
-<details>
-<summary><strong>Contents</strong></summary>
+## Contents
 
 * [System Overview](#system-overview)
 * [Architecture & Design Patterns](#architecture--design-patterns)
@@ -26,16 +25,20 @@ The system follows a layered backend architecture with clear separation between 
 * [Technology Stack](#technology-stack)
 * [Local Development](#local-development)
 * [Project Status](#project-status)
-
-</details>
+* [License](#license)
 
 ---
 
-## System Overview
+<details>
+<summary><strong>System Overview</strong></summary>
 
-The HTS API provides backend services for managing the complete customer support lifecycle.
+### Business Problem
 
-### Core capabilities
+Customer support teams need a structured way to receive, assign, track, resolve, and close support requests while maintaining accountability and visibility throughout the ticket lifecycle.
+
+The system provides a centralized workflow for customers, support agents, managers, and automated background processes.
+
+### Core Capabilities
 
 * Authentication and authorization
 * Customer ticket creation
@@ -55,1063 +58,1080 @@ The HTS API provides backend services for managing the complete customer support
 * File attachments
 * Operational reporting
 
-### Engineering overview
+### Actors
+
+| Actor    | Responsibilities                                                                               |
+| -------- | ---------------------------------------------------------------------------------------------- |
+| Customer | Create tickets, communicate with agents, respond to follow-ups, confirm resolution             |
+| Agent    | Manage assigned tickets, communicate with customers, add internal notes, resolve tickets       |
+| Manager  | Monitor tickets, assign/reassign tickets, manage agents/categories, review history and reports |
+| System   | Assignment, reminders, notifications, inactivity detection, automatic closure                  |
+
+### Engineering Overview
 
 **Django REST Framework · Layered Architecture · PostgreSQL · Redis · Celery · Automated Testing · OpenAPI · Docker · GitHub Actions · AWS**
 
+</details>
+
 ---
 
-## Architecture & Design Patterns
+<details>
+<summary><strong>Architecture & Design Patterns</strong></summary>
 
-The application follows a layered architecture with clearly defined responsibilities.
+### Application Architecture
+
+The application follows a layered architecture:
 
 ```text
 Client
-  ↓
-URL / Router
-  ↓
-Authentication
-  ↓
-Permission / Authorization
-  ↓
-API View
-  ↓
-Serializer
-  ↓
-Service / Application Layer
-  ↓
-Repository / Data Access
-  ↓
-Django ORM
-  ↓
+  │
+  ▼
+API / Views
+  │
+  ▼
+Serializers / Validation
+  │
+  ▼
+Services
+  │
+  ▼
+Repositories / Data Access
+  │
+  ▼
 PostgreSQL
 ```
 
-### Architecture responsibilities
-
-| Layer          | Responsibility                                       |
-| -------------- | ---------------------------------------------------- |
-| URLs / Routers | Define API endpoints and routing                     |
-| Authentication | Identify authenticated API users                     |
-| Permissions    | Enforce role and resource access rules               |
-| API Views      | Coordinate HTTP requests and responses               |
-| Serializers    | Validate and transform API data                      |
-| Services       | Execute application and business workflows           |
-| Repositories   | Encapsulate persistence operations where appropriate |
-| Django ORM     | Provide database interaction and relationships       |
-| PostgreSQL     | Provide persistent relational storage                |
-| Celery         | Execute asynchronous and scheduled workloads         |
-| Redis          | Provide task broker and supporting infrastructure    |
-
-### Service Layer
-
-Business workflows are handled by dedicated services rather than placing complex business logic inside API views.
-
-Services coordinate operations such as:
-
-* Ticket creation
-* Ticket assignment
-* Ticket status transitions
-* Ticket resolution
-* Ticket reopening
-* Customer confirmation
-* Notifications
-* Follow-up workflows
-* Audit history
-
-This keeps HTTP concerns separate from application behavior.
-
-### Repository / Data Access Layer
-
-Persistence operations can be isolated behind repository interfaces where useful.
+Background processing operates alongside the request/response path:
 
 ```text
-TicketService
-     ↓
-TicketRepository
-     ↓
-Django ORM
-     ↓
-PostgreSQL
+Django API
+   │
+   ├── Redis
+   │     │
+   │     └── Celery Queue
+   │              │
+   │              └── Celery Worker
+   │
+   └── PostgreSQL
 ```
 
-This provides separation between business workflows and persistence concerns and makes data access behavior easier to test and evolve.
+### Architectural Responsibilities
 
-### Dependency Injection
+| Layer        | Responsibility                             |
+| ------------ | ------------------------------------------ |
+| API          | HTTP handling, request/response formatting |
+| Serializers  | Input validation and representation        |
+| Services     | Business rules and application workflows   |
+| Repositories | Persistence and query abstraction          |
+| Models       | Domain data and relationships              |
+| Tasks        | Background and asynchronous processing     |
+| Permissions  | Role and object-level authorization        |
 
-Application services depend on defined interfaces or collaborators rather than tightly coupling business workflows to implementation details where abstraction provides value.
+### Design Principles
 
-Dependencies are configured through Django's application configuration and dependency management patterns.
+* Separation of concerns
+* Single responsibility
+* Dependency inversion
+* Explicit business workflows
+* Reusable services
+* Thin API controllers
+* Testable business logic
+* Transactional integrity
+* Secure authorization
+* Observable background processing
 
-### Serializers
+### Assignment Strategy
 
-Django REST Framework serializers provide the API validation and representation boundary.
+New tickets are assigned through an assignment service rather than embedding the strategy directly into the ticket controller.
 
-They are responsible for:
+The initial strategy can select an eligible agent based on current active-ticket workload.
 
-* Request validation
-* Input normalization
-* Response serialization
-* Field-level validation
-* Object-level validation
+```text
+Ticket Created
+      │
+      ▼
+Assignment Service
+      │
+      ▼
+Eligible Agents
+      │
+      ▼
+Assignment Strategy
+      │
+      ▼
+Selected Agent
+```
 
-Business workflows remain in the application/service layer rather than being hidden inside serializers.
+Keeping assignment behind a service allows the strategy to evolve later without rewriting the ticket workflow.
 
-### Permissions & Authorization
-
-Authorization is handled independently from business logic.
-
-Permissions determine whether a user may:
-
-* View a resource
-* Create a resource
-* Update a resource
-* Change a ticket state
-* Reassign a ticket
-* Add internal notes
-* Perform manager operations
-
-Object-level authorization is applied where resource ownership or assignment matters.
+</details>
 
 ---
 
-## API & Business Workflows
+<details>
+<summary><strong>API & Business Workflows</strong></summary>
 
-The API follows REST conventions and is versioned under:
+### API Versioning
+
+The API is versioned:
 
 ```text
 /api/v1/
 ```
 
-Resources use appropriate HTTP methods, status codes, validation responses, pagination, filtering, sorting, and consistent response structures.
+Example resources:
 
-### Ticket creation workflow
+```text
+/api/v1/auth/
+/api/v1/tickets/
+/api/v1/categories/
+/api/v1/comments/
+/api/v1/attachments/
+/api/v1/users/
+```
+
+### Customer Workflow
 
 ```text
 Customer
-  ↓
+   │
+   ▼
 Create Ticket
-  ↓
-Validate Request
-  ↓
-Create Ticket
-  ↓
-Record History
-  ↓
-Determine Assignment
-  ↓
-Assign Agent
-  ↓
-Notify Relevant Users
+   │
+   ▼
+Ticket Categorized
+   │
+   ▼
+Ticket Assigned
+   │
+   ▼
+Agent Communication
+   │
+   ▼
+Resolution
+   │
+   ▼
+Customer Confirmation
+   │
+   ▼
+Closed
 ```
 
-### Ticket assignment
-
-New tickets can be automatically assigned to eligible agents using an application-level assignment strategy.
-
-The initial strategy considers active ticket workload when determining an appropriate agent.
-
-The assignment mechanism is isolated so that the strategy can later evolve without changing the rest of the ticket workflow.
-
-Possible future strategies include:
-
-* Least active tickets
-* Round-robin assignment
-* Skill/category matching
-* Availability-aware assignment
-* Priority-aware assignment
-
-### Ticket communication
-
-Customer-visible communication is separated from internal notes.
+### Agent Workflow
 
 ```text
-Customer
-  ↕
-Ticket Comments
-  ↕
-Agent
+Assigned Ticket
+      │
+      ▼
+Review Ticket
+      │
+      ▼
+Communicate
+      │
+      ▼
+Investigate / Work
+      │
+      ├───────────────┐
+      ▼               ▼
+Waiting          Resolve
+for Customer         │
+      │              ▼
+      └──────────► Customer
+                   Confirmation
+                        │
+                        ▼
+                      Closed
 ```
 
-Internal notes are available to authorized support personnel and are not exposed to customers.
+### Manager Workflow
 
-### Ticket resolution
+Managers can:
 
-```text
-Agent
-  ↓
-Resolve Ticket
-  ↓
-Customer Notified
-  ↓
-Customer Confirms
-  ↓
-Ticket Closed
-```
+* View all tickets
+* Review ticket history
+* Assign tickets
+* Reassign tickets
+* Manage agents
+* Manage categories
+* Review operational information
+* Close or reopen tickets where authorized
 
-A resolved ticket does not automatically become closed merely because an agent marks it resolved. The system supports customer confirmation and authorized management actions.
+### Business Rules
 
-### Customer inactivity workflow
+Business rules are enforced server-side rather than relying on client applications.
 
-```text
-Ticket Waiting for Customer
-          ↓
-     Inactivity Period
-          ↓
-        Reminder
-          ↓
-Customer Still Inactive
-          ↓
-    Automatic Closure
-```
+Examples:
 
-The reminder and automatic closure operations are handled asynchronously through Celery.
+* Customers can only access their own tickets.
+* Agents can access tickets according to their assigned permissions.
+* Managers can access broader operational data.
+* Customers cannot view internal notes.
+* Unauthorized status transitions are rejected.
+* Ticket history is recorded for important state changes.
+* Background operations must be safe to retry.
 
-### Ticket reopening
-
-Authorized users can reopen a closed ticket when additional work is required.
-
-```text
-CLOSED
-  ↓
-Authorized Reopen
-  ↓
-IN_PROGRESS
-```
-
-The reopening operation is recorded in the ticket history.
+</details>
 
 ---
 
-## Ticket Lifecycle
+<details>
+<summary><strong>Ticket Lifecycle</strong></summary>
 
-Tickets use an explicit state model.
+### Ticket States
 
 ```text
 OPEN
-  ↓
-ASSIGNED
-  ↓
-IN_PROGRESS
-  ├──────────────→ WAITING_FOR_CUSTOMER
-  │                         ↓
-  │                  IN_PROGRESS
   │
-  └──────────────→ RESOLVED
-                         ↓
-                       CLOSED
-```
-
-Authorized users may reopen a closed ticket:
-
-```text
-CLOSED
-  ↓
+  ▼
+ASSIGNED
+  │
+  ▼
 IN_PROGRESS
+  │
+  ├──────────────► RESOLVED
+  │                   │
+  │                   ▼
+  │                CLOSED
+  │
+  ▼
+WAITING_FOR_CUSTOMER
+  │
+  ├── Customer Reply ──► IN_PROGRESS
+  │
+  └── Inactivity ──────► CLOSED
 ```
 
-### Ticket states
+### Supported Statuses
 
-| Status                 | Description                                                 |
-| ---------------------- | ----------------------------------------------------------- |
-| `OPEN`                 | Ticket has been created but has not yet been assigned       |
-| `ASSIGNED`             | Ticket has been assigned to an agent                        |
-| `IN_PROGRESS`          | Agent is actively working on the ticket                     |
-| `WAITING_FOR_CUSTOMER` | Further information or action is required from the customer |
-| `RESOLVED`             | Agent has completed the requested support work              |
-| `CLOSED`               | Ticket lifecycle has been completed                         |
+| Status               | Meaning                                 |
+| -------------------- | --------------------------------------- |
+| OPEN                 | Ticket has been created                 |
+| ASSIGNED             | Ticket has an assigned agent            |
+| IN_PROGRESS          | Agent is actively working on the ticket |
+| WAITING_FOR_CUSTOMER | Agent requires customer input           |
+| RESOLVED             | Agent has provided a resolution         |
+| CLOSED               | Ticket workflow is complete             |
 
-### State transition rules
-
-Valid transitions are enforced by application business rules.
+### Transition Rules
 
 ```text
 OPEN → ASSIGNED
-
 ASSIGNED → IN_PROGRESS
-
 IN_PROGRESS → WAITING_FOR_CUSTOMER
-
 IN_PROGRESS → RESOLVED
-
 WAITING_FOR_CUSTOMER → IN_PROGRESS
-
 WAITING_FOR_CUSTOMER → CLOSED
-
 RESOLVED → CLOSED
-
 CLOSED → IN_PROGRESS
 ```
 
-Invalid transitions are rejected rather than allowing clients to arbitrarily modify ticket state.
+Transitions are validated according to the actor, current status, and business rules.
+
+### Resolution
+
+A ticket reaching `RESOLVED` does not necessarily mean it is immediately closed.
+
+The customer may confirm the resolution.
+
+If the customer does not respond within the configured period, the background processing system can send reminders and eventually close the ticket.
+
+### Reopening
+
+Authorized users can reopen a closed ticket when business rules permit it.
+
+Reopening creates an audit event so that the previous closure remains traceable.
+
+</details>
 
 ---
 
-## Background Processing
+<details>
+<summary><strong>Background Processing</strong></summary>
 
-Redis and Celery provide the infrastructure for asynchronous and scheduled operations.
+Redis and Celery are used for work that should not block normal API requests.
 
-Background processing is used where work does not need to block the original API request.
+### Background Responsibilities
 
-### Asynchronous workflow
+* Notifications
+* Reminder messages
+* Inactivity checks
+* Automatic ticket closure
+* Scheduled maintenance tasks
+* Other asynchronous operations
 
-```text
-Django API
-   ↓
-Create Celery Task
-   ↓
-Redis
-   ↓
-Celery Worker
-   ↓
-Background Operation
-```
-
-Examples include:
-
-* Sending notifications
-* Processing reminders
-* Ticket follow-ups
-* Non-blocking application tasks
-* Automated workflow operations
-
-### Scheduled processing
-
-Celery Beat is used for scheduled operations.
+### Processing Flow
 
 ```text
-Celery Beat
-   ↓
-Scheduled Task
-   ↓
-Redis
-   ↓
-Celery Worker
-   ↓
-Business Operation
+Django Application
+       │
+       ▼
+    Redis
+       │
+       ▼
+ Celery Queue
+       │
+       ▼
+ Celery Worker
+       │
+       ▼
+Background Task
+       │
+       ├── Notification
+       ├── Reminder
+       ├── Inactivity Check
+       └── Auto Closure
 ```
 
-Scheduled workflows include:
+### Why Background Processing?
 
-* Detecting inactive tickets
-* Sending customer reminders
-* Identifying tickets eligible for automatic closure
-* Executing recurring operational tasks
+Operations such as notifications and scheduled inactivity checks do not need to delay the user's HTTP request.
 
-### Automatic ticket closure
+Moving them to asynchronous workers provides:
 
-The system can periodically identify tickets that have remained inactive beyond the configured period.
+* Faster API responses
+* Retry capability
+* Better separation of responsibilities
+* Scheduled processing
+* Improved reliability for external operations
 
-```text
-Scheduled Check
-      ↓
-Find Eligible Tickets
-      ↓
-Validate Current State
-      ↓
-Close Ticket
-      ↓
-Record Audit Event
-      ↓
-Notify Relevant Users
-```
+### Idempotency
 
-Background tasks are designed to be safe to retry and should avoid performing duplicate business operations.
+Background tasks should be designed so that retrying a task does not create unintended duplicate actions.
+
+For example, an automatic closure task should verify the current ticket state before changing it.
+
+</details>
 
 ---
 
-## Database & Data Integrity
+<details>
+<summary><strong>Database & Data Integrity</strong></summary>
 
-PostgreSQL provides the primary relational database for the application.
+### Primary Database
 
-Django ORM is used for database interaction while critical integrity rules are reinforced through database constraints and transactional operations.
+PostgreSQL is the primary relational database.
 
-### Database responsibilities
-
-* Foreign-key relationships
-* Unique constraints
-* Indexes
-* Referential integrity
-* Transactional operations
-* Controlled deletion behavior
-* Consistent relationships
-* Atomic state changes
-
-### Core domain relationships
+### Core Entities
 
 ```text
 User
- ├── Customer
- │      ↓
- │    Tickets
- │      ↓
- │    Comments
  │
- └── Agent
-        ↓
-      Tickets
+ ├── Customer
+ ├── Agent
+ └── Manager
 
 Category
-   ↓
-Tickets
-
+   │
+   ▼
 Ticket
  ├── Comments
  ├── Attachments
  └── Ticket History
 ```
 
-### Transactional integrity
+### Main Relationships
 
-Critical multi-step operations are executed within database transactions where multiple records must remain consistent.
+| Entity        | Relationship                                |
+| ------------- | ------------------------------------------- |
+| User          | Creates and participates in tickets         |
+| Category      | Classifies tickets                          |
+| Ticket        | Central support entity                      |
+| Comment       | Communication associated with a ticket      |
+| Attachment    | File associated with a ticket/comment       |
+| TicketHistory | Immutable record of important ticket events |
 
-For example:
+### Data Integrity
+
+The application uses:
+
+* Foreign keys
+* Database constraints
+* Transactions
+* Validation
+* Unique constraints where appropriate
+* Controlled status transitions
+
+### Transaction Boundaries
+
+Operations that modify multiple related records should execute within appropriate database transactions.
+
+For example, ticket assignment may involve:
 
 ```text
-Ticket Assignment
-      +
-Assignment History
-      ↓
-    COMMIT
+Update Ticket
+     +
+Create Assignment History
 ```
 
-Or:
+These operations should succeed or fail together where business consistency requires it.
 
-```text
-Ticket Status Change
-      +
-Audit History
-      ↓
-    COMMIT
-```
+### Audit Data
 
-If a critical operation fails, the transaction can be rolled back rather than leaving partially updated data.
+Important state changes are recorded rather than relying only on the current ticket state.
 
-### Database constraints
+This allows the system to answer questions such as:
 
-The database provides an additional layer of protection against invalid application states.
+* Who created the ticket?
+* Who was assigned?
+* Who reassigned it?
+* When did the status change?
+* Who resolved it?
+* When was it closed?
+* Was it automatically closed?
+* Was it reopened?
 
-Examples include:
-
-* Unique constraints
-* Foreign-key constraints
-* Required fields
-* Valid relationships
-* Appropriate indexes
-
-Application validation provides user-friendly errors while database constraints provide final data integrity protection.
-
-### Indexing
-
-Indexes will be applied to fields frequently used for:
-
-* Ticket filtering
-* Ticket status queries
-* Agent assignment
-* Customer ticket retrieval
-* Category filtering
-* Date-based reporting
-* Audit history queries
+</details>
 
 ---
 
-## Authentication & Authorization
+<details>
+<summary><strong>Authentication & Authorization</strong></summary>
 
-The system uses authenticated API access with role-based authorization.
+### Authentication
 
-### User roles
+The API uses token-based authentication for authenticated API access.
 
-```text
-CUSTOMER
-AGENT
-MANAGER
-```
+Authentication establishes the identity of the requesting user.
 
-### Customer access
+### Authorization
 
-Customers can access only resources they are authorized to view.
+Authorization determines what that authenticated user is allowed to do.
 
-For example:
+The system uses role-based and object-level authorization.
 
-```text
-Customer A
-   ↓
-Customer A's Tickets
-```
-
-Customer A must not be able to retrieve:
+### Roles
 
 ```text
-Customer B's Tickets
+Customer
+Agent
+Manager
 ```
 
-through manipulated IDs or API parameters.
+### Authorization Examples
 
-### Agent access
+| Action                       | Customer |   Agent | Manager |
+| ---------------------------- | -------: | ------: | ------: |
+| Create ticket                |        ✓ |       — |       ✓ |
+| View own tickets             |        ✓ |       — |       ✓ |
+| View assigned tickets        |        — |       ✓ |       ✓ |
+| Add customer-visible comment |        ✓ |       ✓ |       ✓ |
+| Add internal note            |        — |       ✓ |       ✓ |
+| Assign ticket                |        — |       — |       ✓ |
+| Reassign ticket              |        — |       — |       ✓ |
+| Manage categories            |        — |       — |       ✓ |
+| Review all ticket history    |        — | Limited |       ✓ |
 
-Agents can access tickets according to their assigned permissions and ticket relationships.
+### Object-Level Isolation
 
-Agent capabilities include:
+Customers must not be able to access another customer's ticket by changing an ID in the API request.
 
-* Viewing assigned tickets
-* Updating permitted ticket states
-* Adding comments
-* Adding internal notes
-* Resolving tickets
+Authorization is therefore enforced at the object level, not only at the endpoint level.
 
-### Manager access
+### Server-Side Enforcement
 
-Managers have broader operational permissions.
+Security rules are enforced by the backend regardless of the client application.
 
-Manager capabilities include:
+The API does not trust the frontend to enforce authorization.
 
-* Viewing support tickets
-* Assigning tickets
-* Reassigning tickets
-* Managing agents
-* Managing categories
-* Reviewing ticket history
-* Reopening tickets
-* Closing tickets
-* Accessing operational reports
-
-Authorization is enforced server-side rather than relying on frontend restrictions.
+</details>
 
 ---
 
-## Audit History
+<details>
+<summary><strong>Audit History</strong></summary>
 
-Important ticket operations are recorded in a historical record.
+The system maintains ticket history to provide traceability and accountability.
+
+### Events
 
 Examples include:
 
+* Ticket created
+* Ticket assigned
+* Ticket reassigned
+* Status changed
+* Comment added
+* Internal note added
+* Resolution submitted
+* Reminder sent
+* Ticket automatically closed
+* Ticket manually closed
+* Ticket reopened
+
+### Example
+
+```text
+Ticket #1042
+
+09:12  Created by Customer
+09:13  Assigned to Agent A
+09:45  Status changed to IN_PROGRESS
+10:30  Comment added
+11:05  Status changed to WAITING_FOR_CUSTOMER
+14:00  Reminder sent
+16:00  Customer replied
+16:01  Status changed to IN_PROGRESS
+17:20  Resolved by Agent A
+```
+
+### Audit Principles
+
+History should be append-oriented and should preserve the sequence of important events.
+
+The current ticket status represents the current state.
+
+The audit history represents how the ticket reached that state.
+
+</details>
+
+---
+
+<details>
+<summary><strong>Testing</strong></summary>
+
+Testing is part of the development workflow rather than a final project phase.
+
+### Testing Layers
+
+```text
+Unit Tests
+    │
+    ▼
+Service / Business Logic Tests
+    │
+    ▼
+API Tests
+    │
+    ▼
+Integration Tests
+```
+
+### Areas Covered
+
+* Authentication
+* Permissions
 * Ticket creation
-* Assignment
-* Reassignment
-* Status changes
+* Ticket assignment
+* Status transitions
+* Customer isolation
 * Comments
 * Internal notes
-* Resolution
-* Customer confirmation
-* Reminder
-* Automatic closure
-* Reopening
-* Manager actions
+* Audit history
+* Background tasks
+* API validation
+* Error handling
 
-A ticket history provides a chronological record of how the ticket changed over time.
+### Test Philosophy
 
-Example:
+Tests should verify business behavior rather than implementation details.
 
-```text
-Ticket Created
-      ↓
-Assigned to Agent A
-      ↓
-Status: IN_PROGRESS
-      ↓
-Agent Added Comment
-      ↓
-Status: WAITING_FOR_CUSTOMER
-      ↓
-Reminder Sent
-      ↓
-Customer Replied
-      ↓
-Status: IN_PROGRESS
-      ↓
-Resolved
-      ↓
-Customer Confirmed
-      ↓
-Closed
-```
+Important workflows should have tests covering:
 
-Automated operations performed by Celery are recorded in the same history where appropriate.
+* Successful operations
+* Invalid input
+* Unauthorized operations
+* Invalid state transitions
+* Edge cases
+* Retry/idempotency behavior where applicable
+
+### Test Tooling
+
+The project uses:
+
+* Pytest
+* Django test support
+* API testing
+* Factory-based test data where appropriate
+* Coverage reporting
+
+</details>
 
 ---
 
-## Testing
+<details>
+<summary><strong>API Documentation</strong></summary>
 
-The application uses Pytest and pytest-django for automated testing.
+The API is documented using the OpenAPI specification.
 
-Testing is divided across unit, integration, API, and workflow behavior.
+### Documentation Goals
 
-### Unit Tests
+The documentation should make it possible for another developer to understand:
 
-Unit tests isolate application components and verify:
-
-* Business rules
-* Assignment logic
-* State transition rules
-* Calculations
-* Service behavior
-* Validation behavior
-
-### API Tests
-
-API tests verify complete HTTP behavior including:
-
-* Authentication
-* Authorization
-* Request validation
-* HTTP status codes
-* Response structures
-* Pagination
-* Filtering
-* Sorting
-* Customer isolation
-* Agent permissions
-* Manager permissions
-
-### Workflow Tests
-
-Workflow tests verify complete business processes.
-
-Example:
-
-```text
-Create Ticket
-     ↓
-Assign Ticket
-     ↓
-Work Ticket
-     ↓
-Resolve Ticket
-     ↓
-Customer Confirmation
-     ↓
-Close Ticket
-```
-
-### Background Task Tests
-
-Celery-related tests verify:
-
-* Reminder behavior
-* Inactivity detection
-* Automatic closure
-* Notification tasks
-* Retry-safe behavior
-* Task/business-rule integration
-
-### Concurrency-sensitive tests
-
-Important workflows are tested for conditions where concurrent requests could otherwise produce inconsistent state.
-
-Examples include:
-
-* Concurrent assignment
-* Simultaneous status changes
-* Duplicate operations
-
-### Test execution
-
-```bash
-pytest
-```
-
-The automated test suite is also executed through GitHub Actions.
-
----
-
-## API Documentation
-
-The API is documented using OpenAPI.
-
-Interactive documentation will provide:
-
-* Endpoints
+* Available endpoints
 * HTTP methods
-* Authentication
 * Request parameters
 * Request bodies
-* Validation requirements
+* Authentication requirements
 * Response structures
-* Example responses
+* Validation errors
+* Authorization requirements
 
-The project will expose interactive documentation through Swagger UI and ReDoc.
-
-Example API root:
+### Example API Structure
 
 ```text
 /api/v1/
+    auth/
+    tickets/
+    categories/
+    comments/
+    attachments/
+    users/
 ```
+
+### API Documentation
+
+OpenAPI documentation will provide interactive API exploration for development and testing.
+
+The documentation will be kept aligned with the actual API implementation.
+
+</details>
 
 ---
 
-## CI/CD & Git Workflow
+<details>
+<summary><strong>CI/CD & Git Workflow</strong></summary>
 
-The project uses GitHub Actions for continuous integration.
+The repository uses a team-oriented Git workflow.
 
-### Development workflow
-
-```text
-Feature Branch
-     ↓
-Implementation
-     ↓
-Automated Tests
-     ↓
-Commit
-     ↓
-Push
-     ↓
-Pull Request
-     ↓
-GitHub Actions
-     ↓
-Code Review
-     ↓
-Merge
-```
-
-### Branch structure
+### Branches
 
 ```text
 main
- ↑
+ │
+ └── Production
+
 develop
- ↑
+ │
+ └── Integration / Staging
+
 feature/*
+ │
+ └── Individual development work
+
+hotfix/*
+ │
+ └── Production fixes
 ```
 
-### `main`
+### Development Flow
 
-Contains production-ready code.
+```text
+Issue / Task
+     │
+     ▼
+feature/*
+     │
+     ▼
+Implementation
+     │
+     ▼
+Tests + Quality Checks
+     │
+     ▼
+Pull Request
+     │
+     ▼
+CI
+     │
+     ▼
+Code Review
+     │
+     ▼
+develop
+     │
+     ▼
+Production Validation
+     │
+     ▼
+main
+     │
+     ▼
+AWS
+```
 
-### `develop`
+### Commit Convention
 
-Integration branch where completed features are combined and validated before production release.
-
-### `feature/*`
-
-Used for individual development tasks.
+The project follows Conventional Commits.
 
 Examples:
 
 ```text
-feature/authentication
-feature/ticket-model
-feature/ticket-api
-feature/ticket-assignment
-feature/ticket-comments
-feature/celery-reminders
-feature/notifications
-feature/reporting
-feature/aws-deployment
+feat: add ticket assignment service
+fix: prevent unauthorized ticket access
+test: add ticket lifecycle tests
+docs: update API documentation
+refactor: simplify ticket service
+chore: configure CI pipeline
 ```
 
-### `hotfix/*`
+### Pull Requests
 
-Used for urgent production corrections.
+Pull requests should include:
 
-### CI pipeline
+* Clear description
+* Related task/issue
+* Tests
+* Documentation updates where required
+* Migration information where applicable
+* Security considerations where relevant
 
-Pull requests will automatically execute relevant checks such as:
+### Continuous Integration
 
-```text
-Install Dependencies
-        ↓
-Code Quality Checks
-        ↓
-Run Tests
-        ↓
-Build Validation
-```
+GitHub Actions will run automated checks such as:
 
-The goal is to catch problems before changes are merged into the integration or production branches.
+* Tests
+* Linting
+* Formatting
+* Static checks
+* Build validation
+
+Code should not be merged when required CI checks fail.
+
+</details>
 
 ---
 
-## Infrastructure & Containerization
+<details>
+<summary><strong>Infrastructure & Containerization</strong></summary>
 
-Docker is used to provide a consistent development environment.
+Docker provides a consistent development environment.
 
-### Development services
+### Development Services
 
-The local environment is expected to include:
+The local environment is expected to contain services such as:
 
 ```text
-┌──────────────────────────────┐
-│        Django / DRF          │
-└──────────────┬───────────────┘
-               │
-       ┌───────┴────────┐
-       ↓                ↓
-  PostgreSQL          Redis
-                        ↓
-                 Celery Worker
-                        ↑
-                   Celery Beat
+Django API
+PostgreSQL
+Redis
+Celery Worker
+Celery Scheduler
 ```
 
-Docker Compose orchestrates the local infrastructure.
+### Container Architecture
 
-### PostgreSQL
+```text
+                 Docker Environment
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+     Django         PostgreSQL        Redis
+        │                               │
+        │                         ┌─────┴─────┐
+        │                         │           │
+        │                      Worker     Scheduler
+        │
+        └────────────── API Requests
+```
 
-PostgreSQL provides persistent relational storage for application data.
+### Benefits
 
-### Redis
+* Consistent development environment
+* Easier onboarding
+* Service isolation
+* Reproducible configuration
+* Reduced machine-specific differences
 
-Redis provides infrastructure for asynchronous task processing and other supporting workloads.
+Environment-specific configuration is kept outside source-controlled secrets.
 
-### Celery Worker
-
-Celery workers execute background tasks outside the request/response cycle.
-
-### Celery Beat
-
-Celery Beat schedules recurring tasks such as inactivity detection and automated follow-ups.
+</details>
 
 ---
 
-## Cloud & Deployment
+<details>
+<summary><strong>Cloud & Deployment</strong></summary>
 
-The application is intended for deployment on Amazon Web Services (AWS).
+AWS deployment is part of the project lifecycle.
 
-The AWS deployment will be implemented as a dedicated production phase after the application and infrastructure have been completed and tested locally.
+The final deployment architecture will separate application services, persistent data, background workers, caching, and object storage where appropriate.
 
-### Target architecture
+### Target Architecture
 
 ```text
                          Internet
                             │
-                            ↓
-                   ┌─────────────────┐
-                   │  Load Balancer  │
-                   └────────┬────────┘
-                            ↓
-                ┌───────────────────────┐
-                │    Django / DRF API   │
-                └───────────┬───────────┘
+                            ▼
+                     Load Balancer
                             │
-                 ┌──────────┴──────────┐
-                 ↓                     ↓
-          ┌─────────────┐       ┌─────────────┐
-          │ PostgreSQL  │       │    Redis    │
-          └─────────────┘       └──────┬──────┘
-                                       ↓
-                                ┌─────────────┐
-                                │   Celery    │
-                                │   Workers   │
-                                └─────────────┘
-
-                         Celery Beat
-                              ↓
-                       Scheduled Tasks
+                            ▼
+                     Django API
+                       /       \
+                      /         \
+                     ▼           ▼
+              PostgreSQL       Redis
+                 (RDS)           │
+                                 ▼
+                         Celery Workers
+                                 │
+                                 ▼
+                         Background Tasks
 ```
 
-### Production infrastructure
+Additional AWS services may be introduced where they provide a clear operational requirement.
 
-The final AWS architecture is expected to address:
+### Production Concerns
 
-* Django application hosting
-* Application load balancing
-* Managed PostgreSQL
-* Redis
-* Celery workers
-* Scheduled Celery tasks
-* Object storage for attachments
-* HTTPS/TLS
+Deployment planning will address:
+
+* HTTPS
 * Environment configuration
 * Secrets management
-* Logging
-* Monitoring
-* Health checks
 * Database backups
+* Database migrations
+* Static and media files
+* Logging
+* Health checks
+* Monitoring
+* Worker processes
+* Scheduled tasks
 * CI/CD deployment
+* Rollback strategy
 
-The exact AWS services will be documented once the production deployment is implemented.
+### Deployment Principle
 
-### Deployment workflow
+Infrastructure decisions should follow the application's actual operational requirements rather than introducing services without a clear purpose.
 
-The intended production workflow is:
+</details>
+
+---
+
+<details>
+<summary><strong>Security</strong></summary>
+
+Security is applied throughout the application rather than treated as a separate final step.
+
+### Authentication
+
+Authenticated endpoints require valid credentials.
+
+### Authorization
+
+Permissions are checked server-side based on:
+
+* User role
+* Resource ownership
+* Ticket assignment
+* Business rules
+
+### Customer Isolation
+
+A customer must only be able to access resources they are authorized to access.
+
+### Input Validation
+
+Incoming data is validated before business operations are performed.
+
+### File Upload Security
+
+Attachments require controlled validation of:
+
+* File type
+* File size
+* Storage location
+* File naming
+* Access permissions
+
+User-uploaded files should not automatically become executable content.
+
+### Secrets
+
+Secrets such as:
 
 ```text
-Feature Branch
-     ↓
-Pull Request
-     ↓
-CI
-     ↓
-Code Review
-     ↓
-develop
-     ↓
-Production Validation
-     ↓
-main
-     ↓
-AWS Deployment
+DATABASE_PASSWORD
+SECRET_KEY
+AWS credentials
+API keys
 ```
 
----
+must not be committed to Git.
 
-## Security
+Environment configuration is used for sensitive values.
 
-Security controls are applied across the application, database, API, and infrastructure layers.
+### Security Principles
 
-### Application security
-
-* Authentication
-* Role-based authorization
-* Object-level authorization
-* Customer data isolation
+* Least privilege
+* Server-side authorization
+* Secure secret handling
 * Input validation
-* Secure password handling
-* Permission checks
-* Controlled API access
+* Controlled file access
+* Safe error responses
+* Dependency updates
+* Auditability
 
-### API security
-
-* Authenticated endpoints
-* Permission enforcement
-* Request validation
-* Controlled resource access
-* Appropriate error handling
-* Pagination and filtering controls
-
-### File upload security
-
-Attachments are treated as untrusted input.
-
-File upload handling will address:
-
-* File type validation
-* File size limits
-* Safe storage
-* Controlled access
-* Filename handling
-* Prevention of executable uploads
-
-### Production security
-
-Production configuration will address:
-
-* Secret management
-* Secure environment variables
-* HTTPS
-* Database access restrictions
-* Redis access restrictions
-* Secure application configuration
-* Logging and monitoring
+</details>
 
 ---
 
-## Technology Stack
+<details>
+<summary><strong>Technology Stack</strong></summary>
 
-| Category              | Technology                                   |
-| --------------------- | -------------------------------------------- |
-| Backend               | Python / Django                              |
-| API                   | Django REST Framework                        |
-| Database              | PostgreSQL                                   |
-| ORM                   | Django ORM                                   |
-| Authentication        | Django REST Framework Authentication         |
-| Authorization         | DRF Permissions / Object-Level Authorization |
-| Background Processing | Celery                                       |
-| Task Broker           | Redis                                        |
-| Scheduled Tasks       | Celery Beat                                  |
-| Testing               | Pytest / pytest-django                       |
-| API Documentation     | OpenAPI / Swagger UI / ReDoc                 |
-| Code Quality          | Ruff                                         |
-| Git Hooks             | pre-commit                                   |
-| Dependency Management | uv                                           |
-| Containers            | Docker / Docker Compose                      |
-| CI/CD                 | GitHub Actions                               |
-| Cloud                 | AWS                                          |
+| Technology            | Purpose                      |
+| --------------------- | ---------------------------- |
+| Python                | Backend programming language |
+| Django                | Web framework                |
+| Django REST Framework | REST API                     |
+| PostgreSQL            | Primary relational database  |
+| Redis                 | Queue/cache infrastructure   |
+| Celery                | Background processing        |
+| Docker                | Containerization             |
+| Git                   | Version control              |
+| GitHub                | Repository and collaboration |
+| GitHub Actions        | CI/CD automation             |
+| Pytest                | Testing                      |
+| Ruff                  | Linting and formatting       |
+| OpenAPI               | API specification            |
+| AWS                   | Cloud deployment             |
+
+### Development Tooling
+
+The project also uses modern Python development tooling such as:
+
+* `uv` for Python project and dependency management
+* `pre-commit` for automated local checks
+* Postman or Bruno for API testing
+* GitHub CLI where useful for repository workflows
+
+</details>
 
 ---
 
-## Local Development
+<details>
+<summary><strong>Local Development</strong></summary>
 
-The project uses Docker-based infrastructure to provide a consistent development environment.
+### Requirements
 
-### Prerequisites
-
-The development environment will require:
+The development environment requires:
 
 * Git
 * Python
-* uv
 * Docker
 * Docker Compose
+* A code editor such as VS Code
 
-### Clone the repository
+### Repository
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/Johnkm09/helpdesk-ticketing-system.git
 cd helpdesk-ticketing-system
 ```
 
-### Create the environment
+### Development Workflow
 
-Environment configuration will be based on:
+The project uses feature branches for development.
+
+Example:
+
+```bash
+git switch develop
+git pull
+git switch -c feature/ticket-management
+```
+
+Development changes should be made on the feature branch rather than directly on `main`.
+
+### Environment Configuration
+
+Local configuration should be provided through environment variables.
+
+A template environment file will document the required configuration without containing real secrets.
+
+### Running the Application
+
+The exact startup commands will be documented as the project infrastructure is implemented.
+
+The development environment will ultimately start the required services:
 
 ```text
-.env.example
+Django
+PostgreSQL
+Redis
+Celery Worker
+Celery Scheduler
 ```
 
-Copy the example environment file into the local environment configuration and provide the required development values.
+### Quality Checks
 
-### Start infrastructure
+Before opening a pull request, developers should run the project's configured:
 
-The intended development workflow will use:
+* Tests
+* Linting
+* Formatting
+* Pre-commit checks
 
-```bash
-docker compose up
-```
-
-This will run the required application and supporting services.
-
-### Database migrations
-
-Django migrations will be applied using:
-
-```bash
-python manage.py migrate
-```
-
-### Run tests
-
-```bash
-pytest
-```
-
-### Run code quality checks
-
-```bash
-ruff check .
-```
-
-The exact setup and commands will be maintained as the project implementation progresses.
+</details>
 
 ---
 
-## Project Status
+<details>
+<summary><strong>Project Status</strong></summary>
 
-The project is currently in the **Project Foundation** phase.
+### Current Phase
 
-Planned development phases include:
+Repository foundation and system design.
 
-1. Project foundation and Git workflow
-2. Python and Django environment
-3. Authentication and users
-4. Ticket management
-5. Ticket lifecycle and assignment
-6. Comments and attachments
-7. Audit history
-8. Redis and Celery background processing
-9. Notifications and automated workflows
-10. Reporting
-11. Testing and code quality
-12. CI/CD
-13. Production readiness
-14. AWS deployment
+### Completed
 
-The README will be updated as features and infrastructure are implemented.
+* Project concept defined
+* Business workflows defined
+* Ticket lifecycle defined
+* Architecture defined
+* Database/domain model planned
+* Background processing requirements defined
+* Security requirements defined
+* Testing strategy defined
+* Git workflow defined
+* Repository created
+* README documentation established
+* Contributing guidelines established
+* Git ignore configuration established
+
+### Upcoming
+
+* Python project initialization
+* Django project initialization
+* Dependency management
+* Development environment
+* PostgreSQL configuration
+* Core Django applications
+* Custom user model
+* Authentication
+* Ticket domain
+* Ticket lifecycle implementation
+* Assignment service
+* Comments and attachments
+* Audit history
+* Celery background processing
+* Redis integration
+* API documentation
+* Automated tests
+* CI pipeline
+* Docker environment
+* AWS deployment
+
+### Definition of Done
+
+A feature is considered complete when:
+
+* Business behavior is implemented
+* Validation is implemented
+* Authorization is implemented
+* Tests are included
+* Documentation is updated where necessary
+* Quality checks pass
+* CI passes
+* The change has been reviewed
+* The change is merged through the agreed Git workflow
+
+</details>
 
 ---
 
-## License
+<details>
+<summary><strong>License</strong></summary>
 
-This project is currently developed as a portfolio and engineering demonstration project.
+License details will be added when the project license is selected.
+
+</details>
