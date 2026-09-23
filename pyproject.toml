@@ -1,0 +1,13 @@
+[project]
+name = "helpdesk-ticketing-system"
+version = "0.1.0"
+description = "Helpdesk Ticketing System REST API built with Django REST Framework"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "django>=6.1.1",
+    "psycopg[binary]>=3.3.6",
+]
+
+[tool.uv]
+package = false
